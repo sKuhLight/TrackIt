@@ -1,0 +1,12 @@
+- name: DHL
+  html: true
+  from_filter: # optional | String oder Liste
+    - "noreply@dhl.de"
+    - "@dhl.com"
+    - "@dhl.de"
+    - "@gmail.com"
+  regex:
+    - "\\b(\\d{20,22})\\b" # numeric piececode
+    - "\\b(JJD\\w{13,17})\\b" # JJD...
+    - "\\b([A-Z]{2}\\d{9}DE)\\b" # international
+  url: "https://www.dhl.de/...{tracking}"
