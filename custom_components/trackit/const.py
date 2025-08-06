@@ -14,4 +14,5 @@ CONF_FORWARD_SERVICE = "forward_service"  # e.g. "seventeentrack.add_package"
 CONF_FORWARD_DATA = "forward_data"  # optional static fields
 
 DEFAULT_FOLDER = "INBOX"
+DEFAULT_PATTERN_FILE = "trackit_patterns.yaml"
 DEFAULT_SCAN_INTERVAL = 300  # seconds

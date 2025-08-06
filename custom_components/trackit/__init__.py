@@ -12,9 +12,7 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up TrackIt from configuration.yaml."""
-    if DOMAIN in config:
-        _LOGGER.debug("TrackIt configured via YAML")
+    """Set up TrackIt (config entries only)."""
     return True
 
 

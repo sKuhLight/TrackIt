@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Any, Dict, List
 
 import aioimaplib
-import voluptuous as vol
 import yaml
 from bs4 import BeautifulSoup
 from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
     CONF_PASSWORD,
@@ -22,7 +22,6 @@ from homeassistant.const import (
     CONF_USERNAME,
 )
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.storage import Store
@@ -150,12 +149,13 @@ class TrackItManager:
         self.entities: Dict[str, TrackItSensor] = {}
         self.forward_service: str | None = cfg.get(CONF_FORWARD_SERVICE)
         self.forward_data: Dict[str, Any] = cfg.get(CONF_FORWARD_DATA, {})
+        self._unsub = None
 
     async def async_setup(self) -> None:
         await self._async_load_store()
         await self._async_load_patterns()
         interval = timedelta(seconds=self.cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
-        async_track_time_interval(self.hass, self.async_scan, interval)
+        self._unsub = async_track_time_interval(self.hass, self.async_scan, interval)
 
     async def _async_load_patterns(self) -> None:
         path = self.hass.config.path(self.cfg[CONF_PATTERN_FILE])
@@ -235,6 +235,10 @@ class TrackItManager:
         await update_store(self.store, self.last_uid, self.seen_numbers)
         await update_entities(self, new_numbers)
 
+    async def async_unload(self) -> None:
+        if self._unsub:
+            self._unsub()
+
     async def _async_forward(self, code: str, courier: str) -> None:
         if not self.forward_service:
             return
@@ -294,30 +298,11 @@ class TrackItSensor(RestoreEntity, SensorEntity):
 
 # --- Setup ----------------------------------------------------------------
 
-CONFIG_SCHEMA = vol.Schema(
-    {
-        vol.Required(CONF_IMAP): {
-            vol.Required(CONF_HOST): cv.string,
-            vol.Required(CONF_PORT): cv.port,
-            vol.Required(CONF_USERNAME): cv.string,
-            vol.Required(CONF_PASSWORD): cv.string,
-            vol.Optional("folder", default=DEFAULT_FOLDER): cv.string,
-        },
-        vol.Required(CONF_PATTERN_FILE): cv.string,
-        vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): cv.positive_int,
-        vol.Optional(CONF_FORWARD_SERVICE): cv.string,
-        vol.Optional(CONF_FORWARD_DATA, default={}): dict,
-    }
-)
 
-
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities,
-    discovery_info=None,
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
-    cfg = CONFIG_SCHEMA(config)
+    cfg = entry.data
     manager = TrackItManager(hass, cfg)
     await manager.async_setup()
     entities = []
@@ -327,12 +312,26 @@ async def async_setup_platform(
         entities.append(ent)
     async_add_entities(entities)
 
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager
+
     async def _async_push(call: ServiceCall) -> None:
         code = call.data.get("code")
         courier = call.data.get("courier", "unknown")
         await manager._async_forward(code, courier)
 
-    hass.services.async_register(DOMAIN, "push_tracking", _async_push)
+    if not hass.services.has_service(DOMAIN, "push_tracking"):
+        hass.services.async_register(DOMAIN, "push_tracking", _async_push)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    manager: TrackItManager | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if manager:
+        await manager.async_unload()
+    if DOMAIN in hass.data and not hass.data[DOMAIN]:
+        hass.data.pop(DOMAIN)
+        if hass.services.has_service(DOMAIN, "push_tracking"):
+            hass.services.async_remove(DOMAIN, "push_tracking")
+    return True
 
 
 # TODO: Unit tests should cover extract_tracking_numbers and storage update logic.
