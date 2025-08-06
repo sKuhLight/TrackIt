@@ -116,6 +116,15 @@ def extract_tracking_numbers(text: str, patterns: List[re.Pattern]) -> List[str]
     return codes
 
 
+def _load_pattern_file(path: str) -> List[dict[str, Any]]:
+    """Helper to load pattern YAML from disk."""
+    try:
+        return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or []
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Pattern file load failed: %s", err)
+        return []
+
+
 async def update_store(store: Store, last_uid: int, numbers: set[str]) -> None:
     """Persist last UID and numbers to Store."""
     try:
@@ -159,11 +168,7 @@ class TrackItManager:
 
     async def _async_load_patterns(self) -> None:
         path = self.hass.config.path(self.cfg[CONF_PATTERN_FILE])
-        try:
-            data = yaml.safe_load(Path(path).read_text(encoding="utf-8")) or []
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("Pattern file load failed: %s", err)
-            data = []
+        data = await self.hass.async_add_executor_job(_load_pattern_file, path)
         for e in data:
             regex = [re.compile(r) for r in (e["regex"] if isinstance(e["regex"], list) else [e["regex"]])]
             frm = e.get("from_filter")
@@ -267,13 +272,13 @@ class TrackItSensor(RestoreEntity, SensorEntity):
         self._attr_name = f"TrackIt {carrier.name}"
         self._codes: List[str] = []
         self._attr_native_value = 0
+        self._attr_unique_id = f"{DOMAIN}_{carrier.name}"
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         if state := await self.async_get_last_state():
             self._codes = list(state.attributes.get("tracking_numbers", []))
             self._attr_native_value = len(self._codes)
-        await self.async_set_unique_id(f"{DOMAIN}_{self.carrier.name}")
 
     def add_code(self, code: str) -> None:
         self._codes.append(code)
