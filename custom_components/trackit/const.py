@@ -1,10 +1,17 @@
-"""Konstanten für die Mail‑Tracker‑Integration."""
+"""Constants for the TrackIt integration."""
+from __future__ import annotations
 
 DOMAIN = "trackit"
 
-CONF_PATTERN_FILE   = "pattern_file"
-CONF_FORWARD_SERVICE = "forward_service"   # z. B. "seventeentrack.add_package"
-CONF_FORWARD_DATA    = "forward_data"      # optionale statische Felder
+STORAGE_KEY = DOMAIN
+STORAGE_VERSION = 1
+
+CONF_IMAP = "imap"
+CONF_CARRIERS = "carriers"
+CONF_SCAN_INTERVAL = "scan_interval"
+CONF_PATTERN_FILE = "pattern_file"
+CONF_FORWARD_SERVICE = "forward_service"  # e.g. "seventeentrack.add_package"
+CONF_FORWARD_DATA = "forward_data"  # optional static fields
 
 DEFAULT_FOLDER = "INBOX"
-LAST_UID_FILE  = "trackit_last_uid.txt"
+DEFAULT_SCAN_INTERVAL = 300  # seconds
