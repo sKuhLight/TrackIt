@@ -1,0 +1,63 @@
+{
+  "title": "TrackIT",
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "imap_host": "IMAP host",
+          "imap_port": "Port",
+          "security": "Security",
+          "username": "Username",
+          "password": "Password",
+          "mailbox": "Mailbox",
+          "scan_window_days": "Scan window (days)",
+          "unseen_only": "Only unseen"
+        },
+        "layout": [
+          {
+            "type": "grid",
+            "schema": [
+              {"name": "imap_host", "column": 8},
+              {"name": "imap_port", "column": 4}
+            ]
+          },
+          "security",
+          "username",
+          "password",
+          "mailbox",
+          "scan_window_days",
+          "unseen_only"
+        ]
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "action": "Action"
+        }
+      },
+      "settings": {
+        "data": {
+          "scan_interval_minutes": "Scan interval (minutes)",
+          "sensor_state_mode": "Sensor state mode",
+          "max_matches": "Maximum matches",
+          "name": "Sensor name"
+        }
+      },
+      "vendor": {
+        "data": {
+          "name": "Name",
+          "html": "HTML mode",
+          "from_filter": "From filter",
+          "regex": "Regex",
+          "css_selectors": "CSS selectors"
+        }
+      }
+    }
+  }
+}

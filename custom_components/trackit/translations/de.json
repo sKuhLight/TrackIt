@@ -1,0 +1,48 @@
+{
+  "title": "TrackIT",
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "imap_host": "IMAP-Host",
+          "imap_port": "Port",
+          "security": "Sicherheit",
+          "username": "Benutzername",
+          "password": "Passwort",
+          "mailbox": "Mailbox",
+          "scan_window_days": "Zeitraum (Tage)",
+          "unseen_only": "Nur ungelesene"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Verbindung fehlgeschlagen"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "action": "Aktion"
+        }
+      },
+      "settings": {
+        "data": {
+          "scan_interval_minutes": "Scan-Intervall (Minuten)",
+          "sensor_state_mode": "Sensorzustand-Modus",
+          "max_matches": "Maximale Treffer",
+          "name": "Sensorname"
+        }
+      },
+      "vendor": {
+        "data": {
+          "name": "Name",
+          "html": "HTML-Modus",
+          "from_filter": "Von-Filter",
+          "regex": "Regex",
+          "css_selectors": "CSS-Selektoren"
+        }
+      }
+    }
+  }
+}
