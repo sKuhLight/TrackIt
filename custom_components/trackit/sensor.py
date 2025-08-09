@@ -38,7 +38,7 @@ class TrackItSensor(CoordinatorEntity[TrackItCoordinator], SensorEntity):
 
     @property
     def available(self) -> bool:
-        if self.coordinator.last_update_success_time is None:
+        if self.coordinator.last_update is None:
             return True
         return self.coordinator.last_update_success
 
@@ -58,8 +58,8 @@ class TrackItSensor(CoordinatorEntity[TrackItCoordinator], SensorEntity):
     def extra_state_attributes(self):
         return {
             ATTR_MATCHES: self.coordinator.data,
-            ATTR_LAST_SCAN: self.coordinator.last_update_success_time.isoformat()
-            if self.coordinator.last_update_success_time
+            ATTR_LAST_SCAN: self.coordinator.last_update.isoformat()
+            if self.coordinator.last_update and self.coordinator.last_update_success
             else None,
             "mailbox": self._entry.data.get("mailbox"),
             "scan_window_days": self._entry.data.get("scan_window_days"),

@@ -6,7 +6,8 @@ from custom_components.trackit.sensor import TrackItSensor
 
 class DummyCoordinator:
     data = [{"supplier": "DHL", "tracking_id": "123"}]
-    last_update_success_time = dt.datetime.now()
+    last_update = dt.datetime.now()
+    last_update_success = True
 
 
 def test_sensor_state(config_entry):
@@ -20,7 +21,7 @@ def test_sensor_state(config_entry):
 def test_sensor_available_during_initial_refresh(config_entry):
     class DummyCoord:
         data = []
-        last_update_success_time = None
+        last_update = None
         last_update_success = False
 
     sensor = TrackItSensor(DummyCoord(), config_entry)
@@ -30,7 +31,7 @@ def test_sensor_available_during_initial_refresh(config_entry):
 def test_sensor_unavailable_on_failure(config_entry):
     class DummyCoord:
         data = []
-        last_update_success_time = dt.datetime.now()
+        last_update = dt.datetime.now()
         last_update_success = False
 
     sensor = TrackItSensor(DummyCoord(), config_entry)
