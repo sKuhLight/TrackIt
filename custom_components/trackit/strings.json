@@ -12,7 +12,22 @@
           "mailbox": "Mailbox",
           "scan_window_days": "Scan window (days)",
           "unseen_only": "Only unseen"
-        }
+        },
+        "layout": [
+          {
+            "type": "grid",
+            "schema": [
+              {"name": "imap_host", "column": 8},
+              {"name": "imap_port", "column": 4}
+            ]
+          },
+          "security",
+          "username",
+          "password",
+          "mailbox",
+          "scan_window_days",
+          "unseen_only"
+        ]
       }
     },
     "error": {

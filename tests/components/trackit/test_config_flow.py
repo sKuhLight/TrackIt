@@ -23,14 +23,16 @@ async def test_config_flow_user(monkeypatch):
     flow.hass = None
     user_input = {
         CONF_IMAP_HOST: "imap.example.com",
-        CONF_IMAP_PORT: 993,
+        CONF_IMAP_PORT: 993.0,
         CONF_SECURITY: "SSL/TLS",
         CONF_USERNAME: "user",
         CONF_PASSWORD: "pass",
         CONF_MAILBOX: "INBOX",
-        CONF_SCAN_WINDOW_DAYS: 14,
+        CONF_SCAN_WINDOW_DAYS: 14.0,
         CONF_UNSEEN_ONLY: True,
     }
     result = await flow.async_step_user(user_input)
     assert result["type"] == "create_entry"
     assert result["title"] == "TrackIT"
+    assert isinstance(result["data"][CONF_IMAP_PORT], int)
+    assert result["data"][CONF_IMAP_PORT] == 993

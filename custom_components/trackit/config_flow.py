@@ -7,6 +7,7 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import selector
+from homeassistant.helpers.selector import NumberSelectorMode
 
 from .const import (
     DOMAIN,
@@ -83,6 +84,8 @@ class TrackItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input=None):
         errors = {}
         if user_input is not None:
+            user_input[CONF_IMAP_PORT] = int(user_input[CONF_IMAP_PORT])
+            user_input[CONF_SCAN_WINDOW_DAYS] = int(user_input[CONF_SCAN_WINDOW_DAYS])
             ok = await _test_connection(self.hass, user_input)
             if ok:
                 return self.async_create_entry(
@@ -95,7 +98,9 @@ class TrackItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     CONF_IMAP_PORT, default=DEFAULT_IMAP_PORT
                 ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=65535)
+                    selector.NumberSelectorConfig(
+                        min=1, max=65535, mode=NumberSelectorMode.BOX
+                    )
                 ),
                 vol.Required(CONF_SECURITY, default="SSL/TLS"): selector.SelectSelector(
                     selector.SelectSelectorConfig(options=SECURITY_OPTIONS)
@@ -110,13 +115,16 @@ class TrackItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required(
                     CONF_SCAN_WINDOW_DAYS, default=DEFAULT_SCAN_WINDOW_DAYS
                 ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=365)
+                    selector.NumberSelectorConfig(
+                        min=1, max=365, mode=NumberSelectorMode.BOX
+                    )
                 ),
                 vol.Required(
                     CONF_UNSEEN_ONLY, default=DEFAULT_UNSEEN_ONLY
                 ): selector.BooleanSelector(),
             }
         )
+        data_schema = self.add_suggested_values_to_schema(data_schema, user_input or {})
         return self.async_show_form(
             step_id="user", data_schema=data_schema, errors=errors
         )
@@ -180,6 +188,8 @@ class TrackItOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_settings(self, user_input=None):
         if user_input is not None:
+            user_input[CONF_SCAN_INTERVAL] = int(user_input[CONF_SCAN_INTERVAL])
+            user_input[CONF_MAX_MATCHES] = int(user_input[CONF_MAX_MATCHES])
             self.options.update(user_input)
             self.options[CONF_VENDORS] = [vars(v) for v in self.vendors]
             return self.async_create_entry(title="", data=self.options)
@@ -191,7 +201,9 @@ class TrackItOptionsFlow(config_entries.OptionsFlow):
                         CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES
                     ),
                 ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=1440)
+                    selector.NumberSelectorConfig(
+                        min=1, max=1440, mode=NumberSelectorMode.BOX
+                    )
                 ),
                 vol.Required(
                     CONF_SENSOR_STATE_MODE,
@@ -205,7 +217,9 @@ class TrackItOptionsFlow(config_entries.OptionsFlow):
                     CONF_MAX_MATCHES,
                     default=self.options.get(CONF_MAX_MATCHES, DEFAULT_MAX_MATCHES),
                 ): selector.NumberSelector(
-                    selector.NumberSelectorConfig(min=1, max=1000)
+                    selector.NumberSelectorConfig(
+                        min=1, max=1000, mode=NumberSelectorMode.BOX
+                    )
                 ),
                 vol.Required(
                     CONF_NAME,
