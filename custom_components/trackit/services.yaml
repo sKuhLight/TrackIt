@@ -1,0 +1,14 @@
+push_tracking:
+  name: Push tracking
+  description: Forward a tracking number to the configured service
+  fields:
+    code:
+      name: Tracking number
+      description: The tracking number to forward
+      required: true
+      example: "123456789"
+    courier:
+      name: Courier
+      description: Name of the courier/carrier
+      required: false
+      example: "DHL"

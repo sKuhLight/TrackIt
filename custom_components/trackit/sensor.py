@@ -1,88 +1,69 @@
-"""
-Mail‑Tracker Sensor
-• Ausführliche DEBUG‑Logs
-• Absender‑Filter, max_age_days
-• state_mode: "count" | "last_code"
-• Thread‑Safety: Keine HA‑Aufrufe mehr im Executor‑Thread
-"""
-
+"""Async email tracker sensors for Home Assistant."""
 from __future__ import annotations
 
 import email
 import logging
 import re
-from datetime import datetime, timedelta, timezone
+from dataclasses import dataclass
+from datetime import timedelta
 from email.header import decode_header
 from pathlib import Path
 from typing import Any, Dict, List
 
-import voluptuous as vol
+import aioimaplib
 import yaml
 from bs4 import BeautifulSoup
-from homeassistant.components.sensor import PLATFORM_SCHEMA, SensorEntity
+from homeassistant.components.sensor import SensorEntity
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     CONF_HOST,
-    CONF_NAME,
     CONF_PASSWORD,
     CONF_PORT,
     CONF_USERNAME,
-    EVENT_HOMEASSISTANT_STARTED,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.helpers import config_validation as cv
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util.dt import utcnow
-from imapclient import IMAPClient
 
 from .const import (
     CONF_FORWARD_DATA,
     CONF_FORWARD_SERVICE,
+    CONF_IMAP,
     CONF_PATTERN_FILE,
+    CONF_SCAN_INTERVAL,
     DEFAULT_FOLDER,
-    LAST_UID_FILE,
+    DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    STORAGE_KEY,
+    STORAGE_VERSION,
 )
 
 _LOGGER = logging.getLogger(__name__)
-DEFAULT_SCAN = timedelta(minutes=5)
 
-# Separate Debug‑Datei
-_dbg = Path("/config/mail_tracker_debug.log")
-if not any(isinstance(h, logging.FileHandler) and h.baseFilename == str(_dbg) for h in _LOGGER.handlers):
-    fh = logging.FileHandler(_dbg, encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
-    _LOGGER.addHandler(fh)
+# --- Data classes ---------------------------------------------------------
 
-# ───────────────── Plattform‑Schema ─────────────────
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Required(CONF_HOST): cv.string,
-        vol.Required(CONF_PORT): cv.port,
-        vol.Required(CONF_USERNAME): cv.string,
-        vol.Required(CONF_PASSWORD): cv.string,
-        vol.Optional(CONF_NAME,    default="Mail Tracker"): cv.string,
-        vol.Optional("folder",     default=DEFAULT_FOLDER): cv.string,
-        vol.Required(CONF_PATTERN_FILE): cv.string,
-        vol.Optional("scan_interval", default=DEFAULT_SCAN): cv.time_period,
-        vol.Optional("max_age_days"): cv.positive_int,
-        vol.Optional("state_mode",  default="count"): vol.In(["count", "last_code"]),
-        vol.Optional(CONF_FORWARD_SERVICE): cv.string,
-        vol.Optional(CONF_FORWARD_DATA, default={}): dict,
-    }
-)
+@dataclass
+class CarrierPattern:
+    name: str
+    regex: List[re.Pattern]
+    from_filter: List[str]
+    html: bool
+    url: str | None
 
-# ───────── Hilfsfunktionen ─────────
+
+# --- Helper functions -----------------------------------------------------
+
 def _decode_header(val: str) -> str:
     out: list[str] = []
     for txt, enc in decode_header(val):
         if isinstance(txt, bytes):
             enc = (enc or "utf-8").lower()
-            if enc in ("unknown-8bit", "x-unknown", "ansi_x3.4-1968", "ascii"):
-                enc = "utf-8"
             try:
                 out.append(txt.decode(enc))
-            except Exception:
+            except Exception:  # noqa: BLE001
                 out.append(txt.decode("utf-8", errors="replace"))
         else:
             out.append(txt)
@@ -93,187 +74,269 @@ def _split_body(msg: email.message.Message) -> tuple[str, str]:
     plain, html = "", ""
     if msg.is_multipart():
         for part in msg.walk():
-            ctype = part.get_content_type()
-            if "attachment" in str(part.get("Content-Disposition")):
-                continue
-            if ctype == "text/plain":
+            if part.get_content_type() == "text/plain" and not plain:
                 plain = part.get_payload(decode=True).decode(errors="ignore")
-            elif ctype == "text/html":
+            elif part.get_content_type() == "text/html" and not html:
                 html = part.get_payload(decode=True).decode(errors="ignore")
     else:
         payload = msg.get_payload(decode=True).decode(errors="ignore")
-        plain = payload if msg.get_content_type() == "text/plain" else ""
-        html  = payload if msg.get_content_type() != "text/plain" else ""
+        if msg.get_content_type() == "text/plain":
+            plain = payload
+        else:
+            html = payload
     return plain, html
 
 
-# ───────── Sensor‑Klasse ─────────
-class MailTrackerSensor(SensorEntity):
-    _attr_icon = "mdi:package-variant-closed"
-    _attr_should_poll = False
+async def fetch_unseen_uids(client: aioimaplib.IMAP4_SSL, last_uid: int) -> List[int]:
+    """Return list of unseen UIDs since last_uid."""
+    search = ("UID", f"{last_uid + 1}:*") if last_uid else ("ALL",)
+    try:
+        resp = await client.uid_search(*search)
+        return [int(x) for x in resp.lines[0].split()] if resp.lines else []
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("UID search failed: %s", err)
+        return []
+
+
+def filter_by_sender(sender: str, allowed: List[str]) -> bool:
+    """Return True if sender matches allowed list."""
+    if not allowed:
+        return True
+    sl = sender.lower()
+    return any(a.lower() in sl for a in allowed)
+
+
+def extract_tracking_numbers(text: str, patterns: List[re.Pattern]) -> List[str]:
+    """Extract tracking numbers using patterns."""
+    codes: List[str] = []
+    for rx in patterns:
+        hit = rx.search(text)
+        if hit:
+            codes.append(hit.group(1).strip())
+    return codes
+
+
+def _load_pattern_file(path: str) -> List[dict[str, Any]]:
+    """Helper to load pattern YAML from disk."""
+    try:
+        return yaml.safe_load(Path(path).read_text(encoding="utf-8")) or []
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Pattern file load failed: %s", err)
+        return []
+
+
+async def update_store(store: Store, last_uid: int, numbers: set[str]) -> None:
+    """Persist last UID and numbers to Store."""
+    try:
+        await store.async_save({"last_uid": last_uid, "numbers": list(numbers)})
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.error("Store save failed: %s", err)
+
+
+async def update_entities(manager: "TrackItManager", new_numbers: Dict[str, List[str]]) -> None:
+    """Update sensors with new numbers."""
+    for name, codes in new_numbers.items():
+        entity = manager.entities.get(name)
+        if not entity:
+            continue
+        for code in codes:
+            entity.add_code(code)
+
+
+# --- Manager --------------------------------------------------------------
+
+class TrackItManager:
+    """Central coordinator handling IMAP connection and parsing."""
 
     def __init__(self, hass: HomeAssistant, cfg: ConfigType) -> None:
         self.hass = hass
-        self._name        = cfg[CONF_NAME]
-        self._host        = cfg[CONF_HOST]
-        self._port        = cfg[CONF_PORT]
-        self._user        = cfg[CONF_USERNAME]
-        self._pwd         = cfg[CONF_PASSWORD]
-        self._folder      = cfg["folder"]
-        self._pattern_p   = Path(hass.config.path(cfg[CONF_PATTERN_FILE]))
-        self._last_uid_p  = Path(hass.config.path(LAST_UID_FILE))
-        self._fwd_svc     = cfg.get(CONF_FORWARD_SERVICE)
-        self._fwd_data    = cfg.get(CONF_FORWARD_DATA, {})
-        self._max_age     = cfg.get("max_age_days")
-        self._state_mode  = cfg.get("state_mode", "count")
+        self.cfg = cfg
+        self.store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+        self.last_uid: int = 0
+        self.seen_numbers: set[str] = set()
+        self.patterns: List[CarrierPattern] = []
+        self.entities: Dict[str, TrackItSensor] = {}
+        self.forward_service: str | None = cfg.get(CONF_FORWARD_SERVICE)
+        self.forward_data: Dict[str, Any] = cfg.get(CONF_FORWARD_DATA, {})
+        self._unsub = None
 
-        self._compiled: list[dict[str, Any]] = []
-        self._last_uid: int | None = None
-        self._state: int | str = "" if self._state_mode == "last_code" else 0
-        self._attr_extra_state_attributes: Dict[str, Any] = {}
+    async def async_setup(self) -> None:
+        await self._async_load_store()
+        await self._async_load_patterns()
+        interval = timedelta(seconds=self.cfg.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+        self._unsub = async_track_time_interval(self.hass, self.async_scan, interval)
 
-        interval = cfg.get("scan_interval", DEFAULT_SCAN)
-        if isinstance(interval, (int, float)):
-            interval = timedelta(seconds=int(interval))
+    async def _async_load_patterns(self) -> None:
+        path = self.hass.config.path(self.cfg[CONF_PATTERN_FILE])
+        data = await self.hass.async_add_executor_job(_load_pattern_file, path)
+        for e in data:
+            regex = [re.compile(r) for r in (e["regex"] if isinstance(e["regex"], list) else [e["regex"]])]
+            frm = e.get("from_filter")
+            from_filter = frm if isinstance(frm, list) else [frm] if frm else []
+            self.patterns.append(
+                CarrierPattern(
+                    name=e["name"],
+                    regex=regex,
+                    from_filter=from_filter,
+                    html=bool(e.get("html")),
+                    url=e.get("url"),
+                )
+            )
+        _LOGGER.debug("Loaded %d carrier patterns", len(self.patterns))
 
-        async_track_time_interval(hass, self._async_interval, interval)
-        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, self._async_startup)
+    async def _async_load_store(self) -> None:
+        try:
+            data = await self.store.async_load()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Store load failed: %s", err)
+            data = None
+        if data:
+            self.last_uid = data.get("last_uid", 0)
+            self.seen_numbers = set(data.get("numbers", []))
 
-    # ───── Event‑Wrapper ─────
-    async def _async_startup(self, _): await self._update()
-    async def _async_interval(self, _): await self._update()
+    async def async_scan(self, _now=None) -> None:
+        imap = self.cfg[CONF_IMAP]
+        host = imap[CONF_HOST]
+        port = imap[CONF_PORT]
+        user = imap[CONF_USERNAME]
+        pwd = imap[CONF_PASSWORD]
+        folder = imap.get("folder", DEFAULT_FOLDER)
 
-    # ───── Main Update ─────
-    async def _update(self):
-        matches = await self.hass.async_add_executor_job(self._fetch_matches)
-
-        # Fire events & forward service **in Event‑Loop**
-        for itm in matches:
-            self.hass.bus.async_fire("mail_tracker_found", itm)
-            if self._fwd_svc:
-                dom, svc = self._fwd_svc.split(".")
-                data = {**self._fwd_data,
-                        "package_tracking_number": itm["code"],
-                        "package_friendly_name":  itm["courier"]}
-                _LOGGER.debug("Forward %s → %s", itm["code"], self._fwd_svc)
+        client = aioimaplib.IMAP4_SSL(host, port)
+        try:
+            await client.wait_hello_from_server()
+            await client.login(user, pwd)
+            await client.select(folder)
+            uids = await fetch_unseen_uids(client, self.last_uid)
+            new_numbers: Dict[str, List[str]] = {}
+            for uid in uids:
                 try:
-                    await self.hass.services.async_call(dom, svc, data, blocking=False)
+                    resp = await client.uid('fetch', str(uid), '(RFC822)')
+                    raw = b''.join(resp.lines[1:-1]) if len(resp.lines) > 2 else resp.lines[1]
+                    msg = email.message_from_bytes(raw)
+                    frm = _decode_header(msg.get('From', ''))
+                    subj = _decode_header(msg.get('Subject', ''))
+                    plain, html = _split_body(msg)
+                    text_plain = f"{subj}\n{plain}"
+                    text_html = f"{subj}\n{BeautifulSoup(html, 'html.parser').get_text()}" if html else text_plain
+                    for ptn in self.patterns:
+                        if not filter_by_sender(frm, ptn.from_filter):
+                            continue
+                        src = text_html if ptn.html else text_plain
+                        codes = extract_tracking_numbers(src, ptn.regex)
+                        for code in codes:
+                            if code in self.seen_numbers:
+                                continue
+                            self.seen_numbers.add(code)
+                            new_numbers.setdefault(ptn.name, []).append(code)
+                            await self._async_forward(code, ptn.name)
                 except Exception as err:  # noqa: BLE001
-                    _LOGGER.error("Forward‑Call %s fehlgeschlagen: %s", self._fwd_svc, err)
+                    _LOGGER.error("Parse failure for UID %s: %s", uid, err)
+                self.last_uid = uid
+            await client.logout()
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("IMAP connection error: %s", err)
+            return
+        await update_store(self.store, self.last_uid, self.seen_numbers)
+        await update_entities(self, new_numbers)
 
-        # State setzen
-        if self._state_mode == "last_code":
-            if matches:
-                self._state = matches[-1]["code"]
-        else:
-            self._state = len(matches)
+    async def async_unload(self) -> None:
+        if self._unsub:
+            self._unsub()
 
+    async def _async_forward(self, code: str, courier: str) -> None:
+        if not self.forward_service:
+            return
+        try:
+            dom, svc = self.forward_service.split('.')
+            data = {
+                **self.forward_data,
+                "package_tracking_number": code,
+                "package_friendly_name": courier,
+            }
+            await self.hass.services.async_call(dom, svc, data, blocking=False)
+        except Exception as err:  # noqa: BLE001
+            _LOGGER.error("Forward service failed: %s", err)
+
+
+# --- Sensor entities ------------------------------------------------------
+
+class TrackItSensor(RestoreEntity, SensorEntity):
+    """Sensor exposing tracking numbers for a single carrier."""
+
+    _attr_should_poll = False
+
+    def __init__(self, manager: TrackItManager, carrier: CarrierPattern) -> None:
+        self.manager = manager
+        self.carrier = carrier
+        self._attr_name = f"TrackIt {carrier.name}"
+        self._codes: List[str] = []
+        self._attr_native_value = 0
+        self._attr_unique_id = f"{DOMAIN}_{carrier.name}"
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if state := await self.async_get_last_state():
+            self._codes = list(state.attributes.get("tracking_numbers", []))
+            self._attr_native_value = len(self._codes)
+
+    def add_code(self, code: str) -> None:
+        self._codes.append(code)
+        self._attr_native_value = len(self._codes)
         self._attr_extra_state_attributes = {
+            "tracking_numbers": list(self._codes),
             "last_update": utcnow().isoformat(),
-            "matches": matches,
         }
         self.async_write_ha_state()
 
-    # ───── Blocking‑Fetcher ─────
-    def _fetch_matches(self) -> list[dict[str, str]]:
-        self._load_last_uid()
-        self._load_patterns()
-
-        matches: list[dict[str, str]] = []
-        try:
-            with IMAPClient(self._host, port=self._port, ssl=True) as srv:
-                srv.login(self._user, self._pwd)
-                _LOGGER.debug("IMAP‑Login OK für %s", self._user)
-                srv.select_folder(self._folder, readonly=True)
-
-                criteria: list[str] = []
-                if self._max_age:
-                    since = (datetime.now(timezone.utc) - timedelta(days=self._max_age)).strftime("%d-%b-%Y")
-                    criteria.append(f"SINCE {since}")
-                if self._last_uid is not None:
-                    criteria.append(f"UID {self._last_uid + 1}:*")
-                search = f"({' '.join(criteria)})" if criteria else "ALL"
-
-                uids = srv.search(search)
-                _LOGGER.debug("Suche %s → %d Messages", search, len(uids))
-
-                for uid in uids:
-                    raw = srv.fetch([uid], ["RFC822"])[uid][b"RFC822"]
-                    msg = email.message_from_bytes(raw)
-                    subj = _decode_header(msg.get("Subject", ""))
-                    frm  = _decode_header(msg.get("From", ""))
-                    plain, html = _split_body(msg)
-                    preview = (plain or html)[:200].replace("\n", " ")
-                    _LOGGER.debug("UID %s | From:%s | Sub:%s | Prev:%s", uid, frm, subj, preview)
-
-                    ptxt = f"{subj}\n{plain}"
-                    htxt = f"{subj}\n{BeautifulSoup(html, 'html.parser').get_text()}" if html else ptxt
-
-                    for grp in self._compiled:
-                        if grp.get("from_filter") and not any(s.lower() in frm.lower() for s in grp["from_filter"]):
-                            continue
-                        src = htxt if grp["html"] else ptxt
-                        for rx in grp["regex"]:
-                            hit = rx.search(src)
-                            if hit:
-                                code = hit.group(1).strip()
-                                _LOGGER.debug("Treffer %s → %s", grp["name"], code)
-                                matches.append({
-                                    "courier": grp["name"],
-                                    "code":    code,
-                                    "url":     grp["url"].format(tracking=code) if grp.get("url") else None,
-                                })
-                                break
-                    self._last_uid = uid
-
-                self._save_last_uid()
-        except Exception as err:  # noqa: BLE001
-            _LOGGER.error("IMAP‑Fehler: %s", err, exc_info=True)
-
-        return matches
-
-    # ───── File‑Helper ─────
-    def _load_last_uid(self):
-        try:    self._last_uid = int(self._last_uid_p.read_text())
-        except (FileNotFoundError, ValueError): self._last_uid = None
-
-    def _save_last_uid(self):
-        self._last_uid_p.write_text(str(self._last_uid or ""))
-
-    def _load_patterns(self):
-        if not self._pattern_p.exists():
-            _LOGGER.error("Pattern‑Datei %s fehlt", self._pattern_p)
-            self._compiled = []
-            return
-        data = yaml.safe_load(self._pattern_p.read_text()) or []
-        self._compiled = []
-        for e in data:
-            entry = {
-                "name": e["name"],
-                "html": bool(e.get("html")),
-                "url":  e.get("url"),
-                "regex": [re.compile(r) for r in (e["regex"] if isinstance(e["regex"], list) else [e["regex"]])],
-            }
-            if "from_filter" in e:
-                entry["from_filter"] = e["from_filter"] if isinstance(e["from_filter"], list) else [e["from_filter"]]
-            self._compiled.append(entry)
-        _LOGGER.debug("%d Pattern‑Gruppen geladen", len(self._compiled))
-
-    # ───── Entity‑Props ─────
     @property
-    def name(self) -> str:  # type: ignore[override]
-        return self._name
+    def device_info(self) -> Dict[str, Any]:
+        return {
+            "identifiers": {(DOMAIN, "email")},
+            "name": "TrackIt Mail Tracker",
+        }
 
-    @property
-    def native_value(self) -> int | str:  # type: ignore[override]
-        return self._state
+    async def async_update(self) -> None:  # pragma: no cover - manager handles updates
+        """Trigger a manual scan if requested by Home Assistant."""
+        await self.manager.async_scan()
 
 
-# ───────────────── Setup ─────────────────
-async def async_setup_platform(
-    hass: HomeAssistant,
-    config: ConfigType,
-    async_add_entities,
-    discovery_info=None,
-):
-    async_add_entities([MailTrackerSensor(hass, config)])
+# --- Setup ----------------------------------------------------------------
+
+
+async def async_setup_entry(
+    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+) -> None:
+    cfg = entry.data
+    manager = TrackItManager(hass, cfg)
+    await manager.async_setup()
+    entities = []
+    for ptn in manager.patterns:
+        ent = TrackItSensor(manager, ptn)
+        manager.entities[ptn.name] = ent
+        entities.append(ent)
+    async_add_entities(entities)
+
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = manager
+
+    async def _async_push(call: ServiceCall) -> None:
+        code = call.data.get("code")
+        courier = call.data.get("courier", "unknown")
+        await manager._async_forward(code, courier)
+
+    if not hass.services.has_service(DOMAIN, "push_tracking"):
+        hass.services.async_register(DOMAIN, "push_tracking", _async_push)
+
+
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    manager: TrackItManager | None = hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    if manager:
+        await manager.async_unload()
+    if DOMAIN in hass.data and not hass.data[DOMAIN]:
+        hass.data.pop(DOMAIN)
+        if hass.services.has_service(DOMAIN, "push_tracking"):
+            hass.services.async_remove(DOMAIN, "push_tracking")
+    return True
+
+
+# TODO: Unit tests should cover extract_tracking_numbers and storage update logic.
