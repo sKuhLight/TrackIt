@@ -1,6 +1,8 @@
 """Config flow for TrackIT."""
 from __future__ import annotations
 
+import logging
+
 import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
@@ -28,9 +30,12 @@ from .const import (
     DEFAULT_SCAN_INTERVAL_MINUTES,
     DEFAULT_SENSOR_STATE_MODE,
     DEFAULT_MAX_MATCHES,
+    LOGGER_NAME,
 )
 from .imap_client import IMAPClient
 from .models import VendorConfig
+
+_LOGGER = logging.getLogger(LOGGER_NAME)
 
 SECURITY_OPTIONS = ["SSL/TLS", "STARTTLS", "None"]
 
@@ -53,12 +58,20 @@ DHL_TEMPLATE = {
 
 
 async def _test_connection(hass: HomeAssistant, data: dict) -> bool:
+    _LOGGER.debug(
+        "Testing IMAP connection to %s:%s using security=%s",
+        data.get(CONF_IMAP_HOST),
+        data.get(CONF_IMAP_PORT),
+        data.get(CONF_SECURITY),
+    )
     client = IMAPClient(hass, data)
     try:
         await client.async_connect()
         await client.async_logout()
-    except Exception:  # pragma: no cover - network errors
+    except Exception as err:  # pragma: no cover - network errors
+        _LOGGER.debug("IMAP connection test failed: %s", err)
         return False
+    _LOGGER.debug("IMAP connection test succeeded")
     return True
 
 

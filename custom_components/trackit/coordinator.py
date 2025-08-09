@@ -55,6 +55,12 @@ class TrackItCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         window = self.config_entry.data.get(CONF_SCAN_WINDOW_DAYS, 14)
         unseen_only = self.config_entry.data.get(CONF_UNSEEN_ONLY, True)
         since = datetime.now() - timedelta(days=window)
+        self.logger.debug(
+            "Starting IMAP scan last_uid=%s since=%s unseen_only=%s",
+            last_uid,
+            since,
+            unseen_only,
+        )
 
         try:
             uids = await self.imap_client.async_search_since_uid(
@@ -62,6 +68,7 @@ class TrackItCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
             )
         except Exception as err:  # pragma: no cover - imap errors
             raise UpdateFailed(str(err)) from err
+        self.logger.debug("Scan retrieved %d candidate messages", len(uids))
 
         new_matches: list[TrackingMatch] = []
         max_uid = last_uid
@@ -83,4 +90,5 @@ class TrackItCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         )
         self.store.update_cache(new_matches, max_matches)
         await self.store.async_save()
+        self.logger.debug("Scan completed with %d new matches", len(new_matches))
         return self.store.cache
