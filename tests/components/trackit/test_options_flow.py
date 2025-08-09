@@ -26,3 +26,8 @@ async def test_options_flow_add_dhl(config_entry):
     )
     assert result["type"] == "create_entry"
     assert result["data"][CONF_VENDORS][0]["name"] == "DHL"
+
+
+def test_async_get_options_flow(config_entry):
+    flow = config_flow.TrackItConfigFlow.async_get_options_flow(config_entry)
+    assert isinstance(flow, config_flow.TrackItOptionsFlow)

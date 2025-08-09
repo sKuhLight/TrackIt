@@ -5,7 +5,7 @@ import logging
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import selector
 from homeassistant.helpers.selector import NumberSelectorMode
 
@@ -141,7 +141,9 @@ class TrackItConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_import(self, data):  # pragma: no cover - no import
         return await self.async_step_user(data)
 
-    async def async_get_options_flow(self, entry):
+    @staticmethod
+    @callback
+    def async_get_options_flow(entry):
         return TrackItOptionsFlow(entry)
 
 

@@ -15,3 +15,23 @@ def test_sensor_state(config_entry):
     assert sensor.state == 1
     attrs = sensor.extra_state_attributes
     assert attrs[ATTR_MATCHES][0]["tracking_id"] == "123"
+
+
+def test_sensor_available_during_initial_refresh(config_entry):
+    class DummyCoord:
+        data = []
+        last_update_success_time = None
+        last_update_success = False
+
+    sensor = TrackItSensor(DummyCoord(), config_entry)
+    assert sensor.available
+
+
+def test_sensor_unavailable_on_failure(config_entry):
+    class DummyCoord:
+        data = []
+        last_update_success_time = dt.datetime.now()
+        last_update_success = False
+
+    sensor = TrackItSensor(DummyCoord(), config_entry)
+    assert not sensor.available

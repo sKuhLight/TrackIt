@@ -37,6 +37,12 @@ class TrackItSensor(CoordinatorEntity[TrackItCoordinator], SensorEntity):
         self._attr_unique_id = entry.entry_id
 
     @property
+    def available(self) -> bool:
+        if self.coordinator.last_update_success_time is None:
+            return True
+        return self.coordinator.last_update_success
+
+    @property
     def state(self) -> str | int | None:
         mode = self._entry.options.get(
             CONF_SENSOR_STATE_MODE, DEFAULT_SENSOR_STATE_MODE
