@@ -32,7 +32,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         imap_client=imap_client,
         store=store,
     )
-    await coordinator.async_config_entry_first_refresh()
 
     hass.data[DOMAIN][entry.entry_id] = {
         "coordinator": coordinator,
@@ -40,6 +39,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     }
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    # Schedule the first refresh in the background so config entry setup doesn't
+    # block for large initial scans. Sensor state will update once the refresh
+    # completes.
+    hass.async_create_background_task(
+        coordinator.async_config_entry_first_refresh(),
+        f"{DOMAIN}_first_refresh_{entry.entry_id}",
+    )
 
     async def _handle_rescan(call) -> None:
         await coordinator.async_request_refresh()
