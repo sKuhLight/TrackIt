@@ -1,13 +1,12 @@
 {
-  "domain": "tracckit",
-  "name": "TrackIt",
-  "version": "1.0.0",
+  "domain": "trackit",
+  "name": "TrackIT",
+  "version": "0.1.0",
+  "config_flow": true,
   "documentation": "https://github.com/sKuhLight/TrackIt",
   "requirements": [
-    "imapclient==3.0",
-    "beautifulsoup4==4.12.3",
-    "PyYAML==6.0.2"
+    "beautifulsoup4>=4.12.0"
   ],
-  "codeowners": ["@sKuhLight"],
+  "codeowners": ["@your-handle"],
   "iot_class": "cloud_polling"
 }
