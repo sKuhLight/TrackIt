@@ -1,7 +1,9 @@
 """Storage helper for TrackIT."""
 from __future__ import annotations
 
+import json
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, STORAGE_VERSION, CONF_VENDORS
@@ -18,7 +20,10 @@ class TrackItStore:
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}.{entry.entry_id}.json")
 
     async def async_load(self) -> None:
-        data = await self._store.async_load()
+        try:
+            data = await self._store.async_load()
+        except (HomeAssistantError, ValueError, json.JSONDecodeError):
+            data = None
         if data is None:
             data = {
                 "last_uid": 0,
@@ -28,6 +33,8 @@ class TrackItStore:
         self.data = data
 
     async def async_save(self) -> None:
+        # Ensure data is JSON serializable before saving
+        json.dumps(self.data)
         await self._store.async_save(self.data)
 
     @property
