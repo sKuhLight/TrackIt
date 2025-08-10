@@ -27,9 +27,13 @@ class TrackItStore:
         if data is None:
             data = {
                 "last_uid": 0,
-                "vendors": self.entry.options.get(CONF_VENDORS, []),
+                "vendors": [],
                 "cache": [],
             }
+        entry_vendors = self.entry.options.get(CONF_VENDORS, [])
+        if data.get("vendors") != entry_vendors:
+            data["vendors"] = entry_vendors
+            await self._store.async_save(data)
         self.data = data
 
     async def async_save(self) -> None:
