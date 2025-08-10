@@ -37,6 +37,7 @@ class TrackItCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         self.config_entry = config_entry
         self.imap_client = imap_client
         self.store = store
+        self.last_scan: datetime | None = None
         interval = timedelta(
             minutes=config_entry.options.get(
                 CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL_MINUTES
@@ -91,4 +92,5 @@ class TrackItCoordinator(DataUpdateCoordinator[list[dict[str, Any]]]):
         self.store.update_cache(new_matches, max_matches)
         await self.store.async_save()
         self.logger.debug("Scan completed with %d new matches", len(new_matches))
+        self.last_scan = datetime.now()
         return self.store.cache
